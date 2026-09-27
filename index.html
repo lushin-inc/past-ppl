@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lock LS Contacts for GitHub</title>
+<style>
+:root{--bg:#0f1620;--card:#182130;--line:#2a3547;--ink:#e5eaf2;--soft:#8fa0b5;--blue:#7aaaff;--call1:#2f6df6;--call2:#1b3fa8;--red:#f28b8b;--green:#5fce94}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+.wrap{max-width:560px;margin:0 auto;padding:40px 18px 80px}
+h1{font-size:19px;font-weight:600;color:#c9d8ee;margin-bottom:22px}
+.step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+.lab{font-size:13px;color:var(--soft);margin-bottom:8px}
+input[type=file]{color:var(--soft);font-size:14px;width:100%}
+input[type=password]{width:100%;padding:13px 14px;border-radius:10px;border:1px solid var(--line);background:#1d2838;color:var(--ink);font-size:16px;margin-bottom:10px}
+button{width:100%;min-height:58px;border:0;border-radius:14px;font-size:17px;font-weight:700;color:#fff;background:linear-gradient(160deg,var(--call1),var(--call2));cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+.msg{margin-top:14px;font-size:14px;min-height:20px}
+.msg.err{color:var(--red)}.msg.ok{color:var(--green)}
+.tip{font-size:13px;color:var(--soft);margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Lock LS Contacts for GitHub</h1>
+
+  <div class="step">
+    <div class="lab">1. Choose the index.html in your LS Clients folder</div>
+    <input type="file" id="file" accept=".html,text/html">
+  </div>
+
+  <div class="step">
+    <div class="lab">2. Pick a password</div>
+    <input type="password" id="pw1" placeholder="Password" autocomplete="new-password">
+    <input type="password" id="pw2" placeholder="Type it again" autocomplete="new-password">
+    <div class="tip">Use 4 or more random words. The locked file sits on the open internet, so a short password can be guessed.</div>
+  </div>
+
+  <button id="go" disabled>Lock and download</button>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const ITER=600000;
+const enc=new TextEncoder();
+function toB64(u8){let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));return btoa(s);}
+async function lock(html,pw){
+  const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+  const base=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveKey']);
+  const key=await crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:ITER,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt']);
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(html)));
+  return {v:1,it:ITER,s:toB64(salt),i:toB64(iv),c:toB64(ct)};
+}
+/* The page that goes on GitHub: an unlock screen with the encrypted app inside. */
+function shell(p){
+  const S='<'+'script';const E='<'+'/script>';
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>LS Contacts</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f1620;color:#e5eaf2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+.box{max-width:420px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 70px) 20px 40px}
+h1{font-size:19px;font-weight:600;color:#c9d8ee;margin-bottom:18px}
+input[type=password]{width:100%;padding:14px;border-radius:12px;border:1px solid #2a3547;background:#182130;color:#e5eaf2;font-size:17px}
+label{display:flex;gap:8px;align-items:center;font-size:14px;color:#8fa0b5;margin:14px 0 18px}
+button{width:100%;min-height:58px;border:0;border-radius:14px;font-size:17px;font-weight:700;color:#fff;background:linear-gradient(160deg,#2f6df6,#1b3fa8);cursor:pointer}
+.msg{margin-top:14px;font-size:14px;color:#f28b8b;min-height:20px}
+.hidden{display:none}
+</style></head><body>
+<div class="box hidden" id="box">
+  <h1>LS Contacts</h1>
+  <form id="f"><input type="password" id="pw" placeholder="Password" autocomplete="current-password" autofocus>
+  <label><input type="checkbox" id="rem" checked> Remember on this device</label>
+  <button type="submit" id="btn">Unlock</button></form>
+  <div class="msg" id="msg"></div>
+</div>
+${S} type="application/json" id="payload">${JSON.stringify(p)}${E}
+${S}>
+(function(){
+const P=JSON.parse(document.getElementById('payload').textContent);
+const K='lsc.key.'+P.s.slice(0,12);
+const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const ls={get(){try{return localStorage.getItem(K)}catch(e){return null}},set(v){try{localStorage.setItem(K,v)}catch(e){}},del(){try{localStorage.removeItem(K)}catch(e){}}};
+async function open(key){
+  const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(P.i)},key,b64(P.c));
+  const html=new TextDecoder().decode(pt);
+  document.open();document.write(html);document.close();
+}
+async function fromPw(pw){
+  const base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(P.s),iterations:P.it,hash:'SHA-256'},base,{name:'AES-GCM',length:256},true,['decrypt']);
+}
+const box=document.getElementById('box'),msg=document.getElementById('msg'),btn=document.getElementById('btn');
+if(/[?&]lock\\b/.test(location.search))ls.del();
+(async function(){
+  const saved=ls.get();
+  if(saved){try{const key=await crypto.subtle.importKey('raw',b64(saved),'AES-GCM',false,['decrypt']);await open(key);return;}catch(e){ls.del();}}
+  box.classList.remove('hidden');
+})();
+document.getElementById('f').addEventListener('submit',async e=>{
+  e.preventDefault();msg.textContent='';btn.disabled=true;btn.textContent='Unlocking…';
+  try{
+    const key=await fromPw(document.getElementById('pw').value);
+    const raw=new Uint8Array(await crypto.subtle.exportKey('raw',key));
+    const keep=document.getElementById('rem').checked;
+    await open(key);
+    if(keep){let s='';raw.forEach(b=>s+=String.fromCharCode(b));ls.set(btoa(s));}
+  }catch(err){btn.disabled=false;btn.textContent='Unlock';msg.textContent="That password didn't work.";}
+});
+})();
+${E}
+</body></html>`;
+}
+function ready(){ $('go').disabled=!($('file').files.length&&$('pw1').value); }
+['file','pw1','pw2'].forEach(id=>$(id).addEventListener('input',ready));
+$('file').addEventListener('change',ready);
+$('go').addEventListener('click',async()=>{
+  const m=$('msg');m.className='msg';m.textContent='';
+  if($('pw1').value!==$('pw2').value){m.className='msg err';m.textContent="The two passwords don't match.";return;}
+  if(!window.crypto||!crypto.subtle){m.className='msg err';m.textContent='This browser blocked encryption here. Open this file in Chrome.';return;}
+  $('go').disabled=true;$('go').textContent='Locking…';
+  try{
+    const html=await $('file').files[0].text();
+    if(html.includes('id="payload"')&&html.includes('Remember on this device')){throw new Error('That file is already locked. Choose the original index.html.');}
+    const p=await lock(html,$('pw1').value);
+    const blob=new Blob([shell(p)],{type:'text/html'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='index.html';document.body.appendChild(a);a.click();a.remove();
+    m.className='msg ok';m.textContent='Done. The locked index.html is in your Downloads. Upload that one to GitHub.';
+  }catch(err){m.className='msg err';m.textContent=err.message||'Something went wrong.';}
+  $('go').textContent='Lock and download';ready();
+});
+</script>
+</body>
+</html>
